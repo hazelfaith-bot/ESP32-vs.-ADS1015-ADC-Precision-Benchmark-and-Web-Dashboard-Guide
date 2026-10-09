@@ -1,6 +1,6 @@
 /*
   ================================================================
-   SYNCHRONIZED POTENTIOMETER, ALERT, WAVEFORM & BENCHMARK DASHBOARD
+  ESP32 vs. ADS1015 ADC Precision Benchmark and Web Dashboard Guide
   ================================================================
 */
 
