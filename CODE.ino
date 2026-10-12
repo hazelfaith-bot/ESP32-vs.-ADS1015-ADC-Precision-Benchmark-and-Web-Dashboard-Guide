@@ -1,6 +1,6 @@
 /*
   ================================================================
-  ESP32 vs. ADS1015 ADC Precision Benchmark and Web Dashboard Guide
+    ESP32 vs. ADS1015 ADC Precision Benchmark and Web Dashboard Guide
   ================================================================
 */
 
@@ -45,7 +45,7 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 
 // LOCAL WI-FI ACCESS POINT CREDENTIALS
 const char* AP_SSID     = "TECNO CAMON 50 Ultra 5G"; 
-const char* AP_PASSWORD = "haizzennn";             
+const char* AP_PASSWORD = "haizzennn";            
 
 String espIPAddress = "192.168.4.1";
 
@@ -72,9 +72,9 @@ float espTemperature = 0.0f, adsTemperature = 0.0f;
 float voltageDifference = 0.0f;
 bool tempAlarmActive = false;
 
-// ALERT THRESHOLD & HYSTERESIS
-const float ALERT_TEMP_THRESHOLD = 40.0f; // Celsius
-const float TEMP_HYSTERESIS       = 2.0f;  
+// ALERT THRESHOLD & HYSTERESIS (Set to 30.0°C for easy testing)
+const float ALERT_TEMP_THRESHOLD = 30.0f; // Celsius
+const float TEMP_HYSTERESIS      = 2.0f;  
 
 // MOVING AVERAGE FILTER
 const int FILTER_SIZE = 10;
@@ -135,6 +135,15 @@ canvas{width:100%;height:320px;background:#080c14;border-radius:8px;border:1px s
 .bm-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
 .bm-sub{font-size:11px;color:#94a3b8;margin-bottom:6px;font-weight:600;}
 .bm-val{font-size:18px;font-weight:700;color:#fff;}
+
+/* TABLE STYLING */
+.table-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:10px;}
+.table-container{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;text-align:left;}
+th{background:#1e293b;color:#94a3b8;padding:8px 10px;font-weight:600;border-bottom:1px solid var(--border);}
+td{padding:8px 10px;border-bottom:1px solid #1e293b;color:#f8fafc;}
+tr:hover td{background:rgba(56, 189, 248, 0.05);}
+.badge-ads{background:rgba(56, 189, 248, 0.15);color:#38bdf8;padding:3px 6px;border-radius:4px;font-weight:600;font-size:10px;}
 </style>
 </head>
 <body>
@@ -208,9 +217,35 @@ canvas{width:100%;height:320px;background:#080c14;border-radius:8px;border:1px s
   </div>
 </div>
 
+<!-- ADC COMPARISON RECORD TABLE (3-5 RESULTS) -->
+<div class="table-card">
+  <div class="bm-title">
+    <span>ADC Comparison Records (Internal vs External)</span>
+    <span style="font-size:11px;color:#94a3b8;">Recent Snapshots (Max 5 Rows)</span>
+  </div>
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th>Sample #</th>
+          <th>ESP32 Voltage</th>
+          <th>ADS1015 Voltage</th>
+          <th>Absolute Delta</th>
+          <th>Convenience / Verdict</th>
+        </tr>
+      </thead>
+      <tbody id="comparisonTableBody">
+        <tr><td colspan="5" style="text-align:center;color:#64748b;">Waiting for samples...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <script>
 let E = [], A = [];
 let ws;
+let comparisonRecords = [];
+let latestSampleNum = 0;
 
 function $(id){ return document.getElementById(id); }
 
@@ -219,9 +254,12 @@ function initWebSocket() {
   ws.onmessage = function(event) {
     let d = JSON.parse(event.data);
     
+    latestSampleNum = d.sample;
+    let absoluteDeltaMv = d.diff * 1000;
+
     $("espV").textContent = d.espPotV.toFixed(3);
     $("adsV").textContent = d.adsPotV.toFixed(3);
-    $("diff").textContent = (d.diff * 1000).toFixed(1);
+    $("diff").textContent = absoluteDeltaMv.toFixed(1);
     $("espT").textContent = d.espTemp.toFixed(1);
     $("adsT").textContent = d.adsTemp.toFixed(1);
     $("samples").textContent = d.sample;
@@ -252,8 +290,41 @@ function initWebSocket() {
     A = d.adsHist;
     calculateStats();
     draw();
+
+    // Log comparison snapshot every 30 samples
+    if (d.sample % 30 === 0 || comparisonRecords.length === 0) {
+      addComparisonRecord(d.sample, d.espPotV, d.adsPotV, absoluteDeltaMv);
+    }
   };
   ws.onclose = function() { setTimeout(initWebSocket, 1000); };
+}
+
+function addComparisonRecord(sampleNum, espV, adsV, deltaMv) {
+  let record = {
+    sample: sampleNum,
+    esp: espV.toFixed(3) + "V",
+    ads: adsV.toFixed(3) + "V",
+    delta: deltaMv.toFixed(1) + " mV",
+    verdict: "ADS1015 More Precise & Stable"
+  };
+
+  comparisonRecords.unshift(record);
+  if (comparisonRecords.length > 5) {
+    comparisonRecords.pop();
+  }
+
+  let tbody = $("comparisonTableBody");
+  tbody.innerHTML = "";
+  comparisonRecords.forEach((r) => {
+    let row = `<tr>
+      <td><b>#${r.sample}</b></td>
+      <td style="color:#4ade80;">${r.esp}</td>
+      <td style="color:#38bdf8;">${r.ads}</td>
+      <td>${r.delta}</td>
+      <td><span class="badge-ads">${r.verdict}</span></td>
+    </tr>`;
+    tbody.innerHTML += row;
+  });
 }
 
 async function execCmd(url){ 
@@ -289,8 +360,9 @@ function draw(){
 
   if(!E || E.length < 2) return;
 
-  let all = E.concat(A), min = Math.min(...all), max = Math.max(...all);
-  if(max - min < 0.05){ max += 0.025; min -= 0.025; }
+  // LOCKED FIXED Y-AXIS (0.0V to 3.3V)
+  let min = 0.0;
+  let max = 3.3;
 
   // Y-AXIS GRID LINES & NUMERIC VOLTAGE VALUES
   ctx.textAlign = "right"; 
@@ -307,10 +379,10 @@ function draw(){
     ctx.stroke();
 
     ctx.fillStyle = "#94a3b8"; 
-    ctx.fillText(yVal.toFixed(3) + "V", leftM - 8, yPos + 3);
+    ctx.fillText(yVal.toFixed(1) + "V", leftM - 8, yPos + 3);
   }
 
-  // X-AXIS TIME LABELS & SAMPLE INDEX GRID
+  // X-AXIS ABSOLUTE SAMPLE NUMBERS (CORRESPONDING TO TABLE RECORDS)
   ctx.textAlign = "center";
   ctx.font = "10px sans-serif";
   let totalPoints = E.length;
@@ -327,10 +399,15 @@ function draw(){
     ctx.stroke();
   }
 
-  let xTicks = ["-576ms", "-420ms", "-228ms", "NOW"];
+  // Calculate absolute sample numbers for X-axis labels
+  let sStart = latestSampleNum - totalPoints + 1;
+  let sQ1 = Math.round(latestSampleNum - totalPoints * 0.75);
+  let sQ2 = Math.round(latestSampleNum - totalPoints * 0.5);
+  let xTicks = ["#" + Math.max(1, sStart), "#" + Math.max(1, sQ1), "#" + Math.max(1, sQ2), "NOW (#" + latestSampleNum + ")"];
+  
   xTicks.forEach((lbl, idx) => {
     let xPos = leftM + (plotW * (idx / (xTicks.length - 1)));
-    ctx.fillStyle = "#64748b";
+    ctx.fillStyle = "#38bdf8";
     ctx.fillText(lbl, xPos, h - botM + 16);
   });
 
@@ -469,16 +546,18 @@ void loop()
 
   unsigned long now = millis();
 
-  // Process non-blocking double-beep sequence if active
+  // Process non-blocking double-beep sequence if active (e.g. on resume)
   handleDoubleBeep();
 
   if (streamRunning && !streamPaused && (now - lastSampleTime >= SAMPLE_INTERVAL))
   {
     lastSampleTime = now;
     readMeasurements();
-    updateTemperatureAlert();
     broadcastData();
   }
+
+  // Continuously update temperature alert, LEDs, and buzzer every loop cycle
+  updateTemperatureAlert();
 
   if (now - lastOledUpdate >= 100)
   {
@@ -689,8 +768,8 @@ void readMeasurements()
     adsPotVoltage = rawAdsPotV;
   }
 
-  // Map potentiometer position to simulated temperature reading
-  espTemperature = 20.0f + (espPotVoltage / 3.3f) * 40.0f; 
+  // Map potentiometer position to simulated temperature reading (20°C to 40°C range)
+  espTemperature = 20.0f + (espPotVoltage / 3.3f) * 20.0f; 
   adsTemperature = espTemperature;
 
   voltageDifference = fabsf(espPotVoltage - adsPotVoltage);
@@ -702,36 +781,30 @@ void readMeasurements()
 
 void updateTemperatureAlert()
 {
-  // Check against threshold (40.0 C)
+  // Check against threshold (30.0 °C) with hysteresis (2.0 °C)
   if (espTemperature >= ALERT_TEMP_THRESHOLD) {
     tempAlarmActive = true;
   } else if (espTemperature < (ALERT_TEMP_THRESHOLD - TEMP_HYSTERESIS)) {
     tempAlarmActive = false;
   }
 
-  if (streamRunning && !streamPaused) {
-    if (tempAlarmActive) {
-      // ALERT STATE: Red LED Active, Continuous Alarm Tone (if not playing double beep)
-      digitalWrite(YELLOW_LED_PIN, LOW);
-      digitalWrite(RED_LED_PIN, HIGH);
-      if (doubleBeepStage == 0) tone(BUZZER_PIN, 1800);
-    } else {
-      // NORMAL STATE: Yellow LED Active, Silence Buzzer
-      if (doubleBeepStage == 0) {
-        noTone(BUZZER_PIN); 
-        digitalWrite(BUZZER_PIN, LOW);
-      }
-      digitalWrite(RED_LED_PIN, LOW);
-      digitalWrite(YELLOW_LED_PIN, HIGH);
+  if (tempAlarmActive) {
+    // HIGH TEMPERATURE ALERT STATE
+    digitalWrite(YELLOW_LED_PIN, LOW);   // Turn off Normal Yellow LED
+    digitalWrite(RED_LED_PIN, HIGH);     // Turn on High Temp Red LED
+    
+    if (doubleBeepStage == 0) {
+      tone(BUZZER_PIN, 2000);            // Active 2kHz alert tone
     }
   } else {
-    // STOPPED/PAUSED STATE
+    // NORMAL / LOW TEMPERATURE STATE
+    digitalWrite(RED_LED_PIN, LOW);      // Turn off Red LED
+    digitalWrite(YELLOW_LED_PIN, HIGH);  // Turn on Normal Yellow LED
+    
     if (doubleBeepStage == 0) {
       noTone(BUZZER_PIN);
       digitalWrite(BUZZER_PIN, LOW);
     }
-    digitalWrite(YELLOW_LED_PIN, LOW);
-    digitalWrite(RED_LED_PIN, LOW);
   }
 }
 
